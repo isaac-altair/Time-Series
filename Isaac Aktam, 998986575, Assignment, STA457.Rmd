@@ -1,0 +1,174 @@
+---
+title: "STA457 Assignment"
+author: 'Isaac Aktam, Student ID: 998986575'
+date: "August 05, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r dataImport, echo=FALSE, fig.width= 8, fig.height=4, fig.align='center'}
+# use setwd to set your working directory and put the gasfur.csv there
+ dat<-read.csv("gasfur.csv", header=TRUE)
+ gas<-ts(dat[,1],freq=1, start=1)
+ co2<-ts(dat[,2], freq=1, start=1)
+# head(dat)
+# par(mar=c(3,3,1,1))
+# plot(cbind(co2,gas), main="")
+```
+
+#### Model
+Fit the following transfer function noise model
+$$ co2_t =\alpha + \sum^s_{j} v_j \cdot gas_{t-j-b} + e_t,     (1)$$
+where $e_t$ is serially correlated.
+
+#### 1. Use the ideas of prewhitening taught in class to identify b and s. 
+According the following figure, I identify that $b=?$ and $s=?$.
+```{r}
+# Type R codes used to produce the figure for identifying b and s
+install.packages("markdown", repos='http://cran.utstat.utoronto.ca/')
+# library(markdown)
+require(markdown)
+install.packages("forecast", repos='http://cran.utstat.utoronto.ca/')
+library(forecast)
+ccf(gas, co2)
+acf(gas)
+pacf(gas)
+acf(co2)
+pacf(co2)
+
+ar5model = arima(gas, order = c(5,0,0), include.mean = FALSE)
+ar5model # Prints the AR(5) coefficients for gas
+f_co2 = c(1,-ar5model$coef[1:5]) #create a filter to transform co2
+f_co2
+co2_filtered = filter(co2, f_co2, method=c("convolution"),sides=1)
+co2_filtered
+co2_prew = co2_filtered[6:296] # Transformed co2
+co2_prew
+gas_prew = ar5model$residuals[6:296] # Transformed gas
+gas_prew
+acf(gas_prew)
+pacf(gas_prew)
+CCF = ccf(co2_prew, gas_prew) #retrieve cross-correlations
+CCF
+vk = (sd(co2_prew)/sd(gas_prew))*CCF$acf # impulse response function
+vk
+ACF = acf(co2_prew)
+plot(CCF, ylab = "CCF",main = "Cross-correlations after prewhitening")
+
+#According to CCF plot, I identify that s = 4, b = 3
+```
+
+#### 2. Fit Eqn. (1) based on your preliminary identification and R arima function
+Type the mathematical form of your model here
+# We choose ARIMA(3,1,2) since it has the lowest aic. Also, its ccf shows that all of its values are within 95% CI. Therefore, its error terms behave like white noise.
+# Fit for the error terms
+$$  (1-03796*B-0.6830*B^2+0.5802*B^3)*(1-B)*e_{t} = (1+0.2184*B-0.6421*B^2)*j_{t}  $$
+$$  (1-1.3796*B-0.3034*B^2+1.2632*B^3-0.5802*B^4)e_{t} = j_{t}+0.2184*j_{t-1}-0.6421*j_{t-2}  $$
+$$  e_t = 1.3796*e_{t-1}+0.3034*e_{t-2}-1.2632*e_{t-3}+0.5802*e_{t-4}+j_{t}+0.2184*j_{t-1}-0.6421*j_{t-2}        $$
+# Therefore, our final equation is
+$$  co2_t = -.5249*gas_{t-3}-0.6202*gas_{t-4}-0.8556*gas_{t-5}-0.4746*gas_{t-6}-0.3414*gas_{t-7}+1.3796*e_{t-1}+0.3034*e_{t-2}-1.2632*e_{t-3}+0.5802*e_{t-4}+j_{t}+0.2184*j_{t-1}-0.6421*j_{t-2} $$
+where $j_{t}$ ~ N(0,0.05645)
+
+
+```{r}
+# Lagging the gas
+
+gas_lag3 = c(NA, NA, NA, gas[1:293])
+gas_lag4 = c(NA, NA, NA,NA, gas[1:292])
+gas_lag5 = c(NA, NA, NA,NA,NA, gas[1:291])
+gas_lag6 = c(NA, NA, NA,NA,NA,NA, gas[1:290])
+gas_lag7 = c(NA, NA, NA,NA,NA,NA,NA, gas[1:289])
+gas_lag_master = cbind(gas_lag3,gas_lag4,gas_lag5,gas_lag6,gas_lag7)
+colnames(gas_lag_master) = paste("gas_lag",3:7, sep = "")
+
+gas_lag_master
+
+
+# Need to choose optimal model with lowest abs(AIC)
+
+# Run for loop to find the model with optimal p,d,q
+
+aic_c = c()
+p_c = c()
+d_c = c()
+q_c = c()
+for (p in 1:5){
+  for (d in 0:1){
+    for (q in 1:5){
+      p_c = c(p_c, p)
+      d_c = c(d_c, d)
+      q_c = c(q_c, q)
+      fit_reg = arima(co2, xreg = gas_lag_master, order = c(p,d,q))
+      print(fit_reg)
+      print(c(p,d,q))
+      aic_c = c(aic_c, fit_reg$aic)
+    }
+  }
+}
+aic_c
+master_data = cbind(p_c,d_c,q_c,aic_c)
+which.min(master_data[,4]) #row location of min aic
+master_data[27,] # Get the row with the p, d, and q values related to min aic
+
+fit_0 = arima(co2, xreg = gas_lag_master, order = c(3,1,2))
+fit_0 #aic is 11.34
+pacf(fit_0$residuals, na.action = na.pass)
+
+fit_1 = auto.arima(co2, xreg = gas_lag_master)
+fit_1 #aic is 14.4
+pacf(fit_1$residuals, na.action = na.pass)
+
+
+fit_2 = arima(co2, xreg = gas_lag_master, order = c(4,0,0))
+fit_2 # aic is 14.68
+pacf(fit_2$residuals, na.action = na.pass)
+
+fit_3 = arima(co2, xreg = gas_lag_master, order = c(7,1,4), include.mean = FALSE) # testing of various p,d,q
+fit_3 # aic is 11.55
+pacf(fit_3$residuals, na.action = na.pass) # Seems to have best PACF graph so far
+
+aic_list = list(ARIMA312 = fit_0$aic, ARIMA410 = fit_1$aic, ARIMA400 = fit_2$aic, ARIMA714 = fit_3$aic)
+aic_list
+
+# Choose model fit_0 since it has the lowest aic of 11.34
+
+
+# Show R codes that estimate your model and the corresponding estimation result
+```
+
+#### 3. Checking model adequacy of your fitted model.
+The analysis of the model adequacy of the fitted model is as follows:
+
+* e.g. My model pass the residual correlation check using ?? because the corresponding p-value is ??
+* e.g. The cross correlation between xx and xx .....
+
+```{r}
+# Show your R codes and results for checking model adequacy
+
+install.packages("TSA", repos='http://cran.utstat.utoronto.ca/')
+library("TSA")
+p_value_list = list(ARIMA_3_1_2 = LB.test(fit_0, type = c("Ljung-Box"))$p.value, ARIMA_4_1_0 = LB.test(fit_1, type = c("Ljung-Box"))$p.value, ARIMA_4_0_0 = LB.test(fit_2, type = c("Ljung-Box"))$p.value,  ARIMA_7_1_4 = LB.test(fit_3, type = c("Ljung-Box"))$p.value)
+p_value_list
+# All of my models pass the residual correlation check using Ljung-Box test because all of the corresponding p-values are greater than 0.05
+# The cross correlation between gas and residuals of ARIMA(3,1,2) model shows that all of the values are within 
+# the 95% CI, or upper and lower threshold 
+
+ccf(gas, fit_0$residuals, na.action = na.pass)
+ccf(gas, fit_1$residuals, na.action = na.pass)
+ccf(gas, fit_2$residuals, na.action = na.pass)
+ccf(gas, fit_3$residuals, na.action = na.pass)
+
+# From the graph of ccf's, we can see that fit_2 (ARIMA(4,0,0)) has the least optiomal CCF graph.Therefore, we need to choose the most optimal model from: 
+# fit_0, ARIMA(3,1,2)
+# fit_1, ARIMA(4,1,0)
+# fit_3, ARIMA(7,1,4)
+# From the above 3 models, fit_0, ARIMA(3,1,2), has the least aic, therefore
+# it is reasonable to choose it as the most optimal model
+# Also, the ccf(gas, fit_0$residuals) graph shows that residuals behave like white noise and thus have no spikes outside of 95% CI. Beautiful graph indeed.
+
+
+```
+
